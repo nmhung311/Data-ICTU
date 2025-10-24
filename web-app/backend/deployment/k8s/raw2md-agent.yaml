@@ -1,0 +1,312 @@
+# Kubernetes manifests for Raw2MD Agent
+
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: raw2md-agent
+  labels:
+    name: raw2md-agent
+
+---
+# Redis StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: raw2md-agent
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        command:
+        - redis-server
+        - --appendonly
+        - "yes"
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+
+---
+# Redis Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: raw2md-agent
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+
+---
+# MinIO Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: raw2md-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        ports:
+        - containerPort: 9000
+        - containerPort: 9001
+        env:
+        - name: MINIO_ROOT_USER
+          value: "minioadmin"
+        - name: MINIO_ROOT_PASSWORD
+          value: "minioadmin123"
+        command:
+        - server
+        - /data
+        - --console-address
+        - ":9001"
+        volumeMounts:
+        - name: minio-data
+          mountPath: /data
+      volumes:
+      - name: minio-data
+        persistentVolumeClaim:
+          claimName: minio-pvc
+
+---
+# MinIO Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: raw2md-agent
+spec:
+  selector:
+    app: minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001
+
+---
+# MinIO PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: raw2md-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# Raw2MD Agent Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raw2md-agent-worker
+  namespace: raw2md-agent
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: raw2md-agent-worker
+  template:
+    metadata:
+      labels:
+        app: raw2md-agent-worker
+    spec:
+      containers:
+      - name: worker
+        image: raw2md-agent:latest
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        - name: MINIO_ENDPOINT
+          value: "minio:9000"
+        - name: MINIO_ACCESS_KEY
+          value: "minioadmin"
+        - name: MINIO_SECRET_KEY
+          value: "minioadmin123"
+        - name: GOOGLE_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-secrets
+              key: google-api-key
+        - name: PADDLEOCR_USE_GPU
+          value: "true"
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        command:
+        - celery
+        - -A
+        - raw2md_agent.tasks
+        - worker
+        - --loglevel=info
+        - --concurrency=4
+        volumeMounts:
+        - name: input-volume
+          mountPath: /app/input
+        - name: output-volume
+          mountPath: /app/output
+      volumes:
+      - name: input-volume
+        persistentVolumeClaim:
+          claimName: input-pvc
+      - name: output-volume
+        persistentVolumeClaim:
+          claimName: output-pvc
+
+---
+# Input PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: input-pvc
+  namespace: raw2md-agent
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Output PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: output-pvc
+  namespace: raw2md-agent
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Flower Monitoring Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flower
+  namespace: raw2md-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flower
+  template:
+    metadata:
+      labels:
+        app: flower
+    spec:
+      containers:
+      - name: flower
+        image: raw2md-agent:latest
+        env:
+        - name: REDIS_URL
+          value: "redis://redis:6379/0"
+        ports:
+        - containerPort: 5555
+        command:
+        - celery
+        - -A
+        - raw2md_agent.tasks
+        - flower
+        - --port=5555
+
+---
+# Flower Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: flower
+  namespace: raw2md-agent
+spec:
+  selector:
+    app: flower
+  ports:
+  - port: 5555
+    targetPort: 5555
+  type: LoadBalancer
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: raw2md-agent-hpa
+  namespace: raw2md-agent
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: raw2md-agent-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# API Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+  namespace: raw2md-agent
+type: Opaque
+data:
+  google-api-key: <base64-encoded-api-key>

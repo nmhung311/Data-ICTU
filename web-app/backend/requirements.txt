@@ -1,0 +1,31 @@
+# Vietnamese Legal Document Metadata Extractor
+# Production requirements
+flask==2.3.3
+flask-cors==4.0.0
+werkzeug==2.3.7
+
+# Core dependencies
+google-generativeai==0.3.2
+pydantic==2.5.0
+
+# OCR dependencies
+pytesseract==0.3.10
+Pillow==10.1.0
+opencv-python==4.8.1.78
+
+# Optional OCR engines
+paddlepaddle==2.5.2
+paddleocr==2.7.3
+
+# PDF processing
+PyMuPDF==1.23.8
+
+# Utilities
+python-dateutil==2.8.2
+pathlib2==2.3.7
+
+# Development dependencies
+pytest==7.4.3
+pytest-cov==4.1.0
+black==23.11.0
+flake8==6.1.0
