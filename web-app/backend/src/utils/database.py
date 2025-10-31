@@ -52,18 +52,30 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS metadata_blocks (
                     id TEXT PRIMARY KEY,
                     doc_id TEXT NOT NULL,
-                    data_type TEXT NOT NULL,
+                    department TEXT NOT NULL DEFAULT 'Training Department',
+                    type_data TEXT NOT NULL DEFAULT 'markdown',
                     category TEXT NOT NULL,
                     date TEXT,
                     source TEXT,
                     content TEXT NOT NULL,
-                    confidence REAL DEFAULT 0.0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (doc_id) REFERENCES sources (id)
                 )
             ''')
             
-            # Create files table for uploaded files tracking
+            # Create sources table for uploaded files tracking
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS sources (
+                    id TEXT PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    file_type TEXT NOT NULL,
+                    file_size INTEGER,
+                    upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_path TEXT NOT NULL
+                )
+            ''')
+            
+            # Create files table for uploaded files tracking (legacy)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS files (
                     id TEXT PRIMARY KEY,
@@ -174,8 +186,33 @@ class DatabaseManager:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
     
+    def save_source(self, file_data: Dict[str, Any]) -> str:
+        """Save uploaded source file information"""
+        file_id = str(uuid.uuid4())
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO sources (id, filename, file_type, file_size, file_path)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    file_id,
+                    file_data.get('filename'),
+                    file_data.get('file_type'),
+                    file_data.get('file_size'),
+                    str(file_data.get('file_path'))  # Convert to string
+                ))
+                
+                conn.commit()
+                logger.info(f"Source saved to database: {file_id}")
+                return file_id
+        except Exception as e:
+            logger.error(f"Failed to save source to database: {e}")
+            raise
+    
     def save_file(self, file_data: Dict[str, Any]) -> str:
-        """Save uploaded file information"""
+        """Save uploaded file information (legacy)"""
         file_id = str(uuid.uuid4())
         
         try:
@@ -247,6 +284,30 @@ class DatabaseManager:
                 'total_files_uploaded': total_files
             }
     
+    def get_source(self, source_id: str) -> Optional[Dict[str, Any]]:
+        """Get source file information by ID"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM sources WHERE id = ?', (source_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return dict(row)
+            return None
+    
+    def list_sources(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List source files with pagination"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, filename, file_type, file_size, upload_time, file_path
+                FROM sources 
+                ORDER BY upload_time DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+    
     def get_file(self, file_id: str) -> Optional[Dict[str, Any]]:
         """Get file information by ID"""
         with self.get_connection() as conn:
@@ -258,8 +319,16 @@ class DatabaseManager:
                 return dict(row)
             return None
     
+    def delete_source(self, source_id: str) -> bool:
+        """Delete source from database"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM sources WHERE id = ?', (source_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+    
     def delete_file(self, file_id: str) -> bool:
-        """Delete file from database"""
+        """Delete file from database (legacy)"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM files WHERE id = ?', (file_id,))

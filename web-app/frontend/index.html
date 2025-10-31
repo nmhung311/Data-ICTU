@@ -3,19 +3,207 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- CSP temporarily disabled for development with Babel -->
-    <!-- <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:5000;"> -->
     <title>Raw2MD Agent - Document Processing</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='4' fill='%232c3e50'/><path d='M8 12H16V16H8V12Z' fill='%2334495e'/><path d='M8 18H24V22H8V18Z' fill='%2334495e'/><path d='M8 24H24V28H8V24Z' fill='%2334495e'/></svg>">
     <link rel="stylesheet" href="styles.css">
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="config.js"></script>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <h1>Raw2MD Agent</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-secondary" onclick="loadFiles()">
+                        <svg viewBox="0 0 24 24" width="16" height="16">
+                            <path d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" fill="currentColor"/>
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </header>
 
-    <script type="text/babel" src="app.js"></script>
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Progress Indicator -->
+            <div class="progress-container">
+                <div class="progress-step" id="step-upload">
+                    <div class="step-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M9,16V10H5L12,3L19,10H15V16H9M5,20V18H19V20H5Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <div class="step-label">Tải file</div>
+                </div>
+                <div class="progress-step" id="step-extract">
+                    <div class="step-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <div class="step-label">Trích xuất</div>
+                </div>
+                <div class="progress-step" id="step-metadata">
+                    <div class="step-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M12,2A3,3 0 0,0 9,5A3,3 0 0,0 12,8A3,3 0 0,0 15,5A3,3 0 0,0 12,2M12,9C7,9 3,10.11 3,11.5C3,12.89 7,14 12,14C17,14 21,12.89 21,11.5C21,10.11 17,9 12,9M12,16C8.5,16 5.25,16.84 3.57,17.93C3.5,17.96 3.5,18 3.5,18.07L3.5,18.5C3.5,19.05 4.95,19.5 12,19.5C19.05,19.5 20.5,19.05 20.5,18.5V18.07C20.5,18 20.5,17.96 20.43,17.93C18.75,16.84 15.5,16 12,16Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <div class="step-label">Metadata</div>
+                </div>
+                <div class="progress-step" id="step-structure">
+                    <div class="step-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M12,3L2,7.5V9.5C2,14.75 5.81,19.66 12,21C18.19,19.66 22,14.75 22,9.5V7.5L12,3M12,5.18L20,8.5V9.5C20,13.45 17.16,17.31 12,18.72C6.84,17.31 4,13.45 4,9.5V8.5L12,5.18Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <div class="step-label">Cấu trúc</div>
+                </div>
+                <div class="progress-step" id="step-complete">
+                    <div class="step-icon">
+                        <svg viewBox="0 0 24 24" width="24" height="24">
+                            <path d="M21,7L9,19L3.5,13.5L4.91,12.09L9,16.17L19.59,5.59L21,7Z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <div class="step-label">Hoàn tất</div>
+                </div>
+            </div>
+
+            <div class="container" id="mainContainer">
+                <!-- Documents Section -->
+                <section class="documents-section">
+                    <div class="section-header" id="documentsSectionHeader">
+                        <h2>Documents</h2>
+                        <div class="documents-stats">
+                            <span id="filesCount">0 files</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Upload Area -->
+                    <div class="upload-area" id="uploadArea">
+                        <div class="upload-content" id="uploadContent">
+                            <div class="upload-icon">
+                                <svg viewBox="0 0 24 24" width="48" height="48">
+                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" fill="currentColor"/>
+                                </svg>
+                            </div>
+                            <h3>Upload Document</h3>
+                            <p>Click to browse files</p>
+                            <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.html,.xml,.json" style="display: none;">
+                            <button class="btn-primary" onclick="document.getElementById('fileInput').click()">
+                                Choose File
+                            </button>
+                        </div>
+                        
+                        <!-- Document Viewer -->
+                        <div id="documentViewer" class="document-viewer" style="display: none;" onclick="event.stopPropagation();">
+                            <div class="viewer-header" onclick="event.stopPropagation();">
+                                <div class="viewer-title">
+                                    <h3 id="viewerTitle"></h3>
+                                    <span id="viewerSubtitle" class="viewer-subtitle"></span>
+                                </div>
+                                <div class="viewer-actions">
+                                    <button class="btn-primary btn-sm" onclick="event.stopPropagation(); generateMetadata();" id="generateMetadataBtn">
+                                        <svg viewBox="0 0 24 24" width="16" height="16">
+                                            <path d="M12,2A10,10 0 0,1 22,12A10,10 0 0,1 12,22A10,10 0 0,1 2,12A10,10 0 0,1 12,2M12,4A6,6 0 0,0 6,10A6,6 0 0,0 12,16A6,6 0 0,0 18,10A6,6 0 0,0 12,4M12,6A4,4 0 0,1 16,10A4,4 0 0,1 8,10A4,4 0 0,1 12,14A4,4 0 0,1 8,10A4,4 0 0,1 12,6Z" fill="currentColor"/>
+                                        </svg>
+                                        Generate Metadata
+                                    </button>
+                                    <button class="btn-danger btn-sm" onclick="event.stopPropagation(); deleteDocument();" id="deleteBtn">
+                                        <svg viewBox="0 0 24 24" width="16" height="16">
+                                            <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" fill="currentColor"/>
+                                        </svg>
+                                        Delete
+                                    </button>
+                                    <button class="btn-secondary btn-sm" onclick="event.stopPropagation(); closeViewer();">
+                                        <svg viewBox="0 0 24 24" width="16" height="16">
+                                            <path d="M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z" fill="currentColor"/>
+                                        </svg>
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="viewer-content" onclick="event.stopPropagation();">
+                                <div id="viewerLoading" class="viewer-loading" style="display: none;">
+                                    <div class="loading-spinner"></div>
+                                    <p>Loading document...</p>
+                                </div>
+                                <div id="viewerError" class="viewer-error" style="display: none;">
+                                    <div class="error-icon">
+                                        <svg viewBox="0 0 24 24" width="48" height="48">
+                                            <path d="M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z" fill="currentColor"/>
+                                        </svg>
+                                    </div>
+                                    <h3>Error loading document</h3>
+                                    <p id="viewerErrorMessage"></p>
+                                </div>
+                                <div id="viewerContent" class="viewer-content-area"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Files List -->
+                    <div id="filesList" class="files-list">
+                        <div class="empty-state">
+                            <div class="empty-icon">
+                                <svg viewBox="0 0 24 24" width="48" height="48">
+                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" fill="currentColor"/>
+                                </svg>
+                            </div>
+                            <h3>No documents yet</h3>
+                            <p>Upload your first document to get started</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Metadata Section -->
+                <section class="metadata-section">
+                    <div class="section-header">
+                        <h2>Metadata Output</h2>
+                        <div class="metadata-header-actions">
+                            <div class="metadata-stats">
+                                <span id="metadataCount">0 blocks</span>
+                            </div>
+                            <button class="btn-primary btn-sm" onclick="exportToMarkdown()" id="exportMarkdownBtn" style="display: none;">
+                                <svg viewBox="0 0 24 24" width="16" height="16">
+                                    <path d="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z" fill="currentColor"/>
+                                </svg>
+                                Download MD
+                            </button>
+                            <button class="btn-danger btn-sm" onclick="clearAllMetadata()" id="clearMetadataBtn" style="display: none;">
+                                <svg viewBox="0 0 24 24" width="16" height="16">
+                                    <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" fill="currentColor"/>
+                                </svg>
+                                Clear All
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="metadataMarkdown" class="metadata-markdown">
+                        <div class="empty-state">
+                            <div class="empty-icon">
+                                <svg viewBox="0 0 24 24" width="48" height="48">
+                                    <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6M12,8A4,4 0 0,1 16,12A4,4 0 0,1 8,12A4,4 0 0,1 12,16A4,4 0 0,1 12,8Z" fill="currentColor"/>
+                                </svg>
+                            </div>
+                            <h3>No metadata blocks yet</h3>
+                            <p>Generate metadata from your documents to see complete markdown output</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
 </body>
 </html>
-

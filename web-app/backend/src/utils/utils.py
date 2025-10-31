@@ -6,10 +6,12 @@ Helper functions and utilities
 """
 
 import io
+import os
 import time
+import uuid
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 # Import config for OUTPUT_FOLDER
 from .config import config
@@ -64,6 +66,8 @@ def detect_file_type(filename: str) -> str:
         return 'html'
     elif extension == 'txt':
         return 'txt'
+    elif extension in ['md', 'markdown']:
+        return 'md'
     elif extension == 'csv':
         return 'csv'
     elif extension == 'xml':
@@ -210,241 +214,267 @@ def process_document_advanced(file_path: str, options: Optional[Dict[str, Any]] 
             'processing_time': time.time() - start_time if 'start_time' in locals() else 0
         }
 
-def process_document_simple(file_path: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Process document using simple extraction with fallback methods"""
+def _read_pdf_text_pypdf2(file_path: str) -> str:
+    """Read PDF text using PyPDF2 with null safety."""
     try:
-        start_time = time.time()
-        
-        # Import Path here to avoid scope issues
-        from pathlib import Path
-        
-        opts = options or {}
-        ocr_enabled = bool(str(opts.get('ocr_enabled', True)).lower() in {'1','true','t','yes','y','on'})
-        
-        # Detect file type
-        file_type = detect_file_type(Path(file_path).name)
-        logger.info(f"Simple processing file: {Path(file_path).name}, type: {file_type}, OCR: {ocr_enabled}")
-        
-        # Try to extract text using available methods
-        raw_text = ""
-        
-        # Method 1: Try PyPDF2 for PDF files
-        if file_type == 'pdf':
-            try:
-                import PyPDF2
-                with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    text_parts = []
-                    for page in pdf_reader.pages:
-                        text_parts.append(page.extract_text())
-                    raw_text = '\n'.join(text_parts)
-                logger.info(f"PyPDF2 extracted {len(raw_text)} characters")
-            except Exception as e:
-                logger.warning(f"PyPDF2 extraction failed: {e}")
-        
-        # Method 2: Try PyMuPDF (fitz) for PDF files if PyPDF2 failed
-        if not raw_text and file_type == 'pdf':
-            try:
-                import fitz
-                doc = fitz.open(file_path)
-                text_parts = []
-                for page_num in range(len(doc)):
-                    page = doc[page_num]
-                    text_parts.append(page.get_text())
-                doc.close()
-                raw_text = '\n'.join(text_parts)
-                logger.info(f"PyMuPDF extracted {len(raw_text)} characters")
-            except Exception as e:
-                logger.warning(f"PyMuPDF extraction failed: {e}")
-        
-        # Method 3: Try basic file reading for text files
-        if not raw_text and file_type in ['txt', 'html', 'xml', 'json']:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    raw_text = file.read()
-                logger.info(f"File reading extracted {len(raw_text)} characters")
-            except Exception as e:
-                logger.warning(f"File reading failed: {e}")
-        
-        # Method 4: Try docx for Word documents
-        elif file_type == 'docx':
-            try:
-                from docx import Document
-                doc = Document(file_path)
-                raw_text = '\n'.join(p.text for p in doc.paragraphs)
-                logger.info(f"python-docx extracted {len(raw_text)} characters")
-            except Exception as e:
-                logger.warning(f"python-docx extraction failed: {e}")
-
-        elif file_type == 'doc':
-            logger.warning("Legacy .doc not supported by python-docx. Consider converting to .docx.")
-            # Tùy bạn: gọi mammoth/antiword nếu đã cài, còn không thì để OCR fallback nếu là scan
-        
-        # OCR nếu được phép
-        if ocr_enabled and not raw_text.strip() and file_type in ['pdf','image']:
-            try:
-                import pytesseract
-                from PIL import Image
-                if file_type == 'pdf':
-                    import fitz
-                    doc = fitz.open(file_path)
-                    for i in range(doc.page_count):
-                        page = doc[i]
-                        mat = fitz.Matrix(3.0, 3.0)  # ~300 DPI
-                        pix = page.get_pixmap(matrix=mat)
-                        img = Image.open(io.BytesIO(pix.tobytes("png")))
-                        raw_text += pytesseract.image_to_string(img, lang='vie+eng') + '\n'
-                    doc.close()
-                else:
-                    img = Image.open(file_path)
-                    raw_text = pytesseract.image_to_string(img, lang='vie+eng')
-                logger.info(f"OCR extracted {len(raw_text)} characters")
-            except Exception as e:
-                logger.warning(f"OCR extraction failed: {e}")
-
-        # Nếu OCR tắt hoặc vẫn không có text
-        if not raw_text.strip():
-            if not ocr_enabled and file_type in ['pdf','image']:
-                logger.warning("OCR disabled and no text layer found.")
-            if not raw_text.strip():
-                raw_text = f"[Scanned document - no text extracted]\nFile: {Path(file_path).name}\nType: {file_type}"
-        
-        # Simple cleaning
-        cleaned_text = raw_text.strip()
-        
-        # Initialize output_path
-        output_path = None
-        
-        # Try metadata extraction with fallback
-        metadata = {}
-        try:
-            # Try EnhancedVnLegalSplitter for metadata extraction
-            from src.core.document_splitter import EnhancedVnLegalSplitter
-            splitter = EnhancedVnLegalSplitter()
-            logger.info(f"Starting EnhancedVnLegalSplitter with text length: {len(cleaned_text)}")
-            
-            # Extract document metadata first
-            doc_metadata = splitter._extract_document_metadata(cleaned_text)
-            logger.info(f"Extracted doc_metadata: {doc_metadata}")
-            
-            blocks = splitter.split_document(cleaned_text)
-            logger.info(f"EnhancedVnLegalSplitter returned {len(blocks)} blocks")
-            
-            if len(blocks) > 1:
-                # Use splitter results
-                metadata = {
-                    'blocks_count': len(blocks),
-                    'doc_id': blocks[0].doc_id if blocks else None,
-                    'filename': str(Path(file_path).name),  # Convert to string
-                    'file_type': file_type,
-                    'source': str(Path(file_path).name)  # Convert to string
-                }
-                
-                # Create markdown with blocks
-                markdown_parts = []
-                for block in blocks:
-                    markdown_parts.append(f"---\n## Metadata\n")
-                    markdown_parts.append(f"**doc_id:** {block.doc_id}\n")
-                    markdown_parts.append(f"**category:** {block.category}\n")
-                    markdown_parts.append(f"**source:** {block.source}\n")
-                    markdown_parts.append(f"**date:** {block.date}\n")
-                    markdown_parts.append(f"**modify:** {block.modify}\n")
-                    markdown_parts.append(f"**partial_mod:** {block.partial_mod}\n")
-                    markdown_parts.append(f"**data_type:** {block.data_type}\n")
-                    markdown_parts.append(f"**amend:** {block.amend}\n")
-                    markdown_parts.append(f"## Nội dung\n{block.content}\n")
-                
-                markdown_content = '\n'.join(markdown_parts)
-            else:
-                logger.info("EnhancedVnLegalSplitter returned <= 1 blocks, using extracted metadata")
-                # Use extracted metadata even if no blocks
-                metadata = {
-                    'doc_id': doc_metadata.get('doc_id', ''),
-                    'category': 'training_and_regulations',
-                    'source': str(Path(file_path).name),
-                    'date': doc_metadata.get('date', ''),
-                    'modify': '',
-                    'partial_mod': False,
-                    'data_type': 'markdown',
-                    'amend': '',
-                    'filename': str(Path(file_path).name),
-                    'file_type': file_type
-                }
-                
-                # Create simple markdown with extracted metadata
-                markdown_content = f"## Metadata\n"
-                markdown_content += f"- **doc_id:** {metadata['doc_id']}\n"
-                markdown_content += f"- **category:** {metadata['category']}\n"
-                markdown_content += f"- **source:** {metadata['source']}\n"
-                markdown_content += f"- **date:** {metadata['date']}\n"
-                markdown_content += f"- **modify:** {metadata['modify']}\n"
-                markdown_content += f"- **partial_mod:** {metadata['partial_mod']}\n"
-                markdown_content += f"- **data_type:** {metadata['data_type']}\n"
-                markdown_content += f"- **amend:** {metadata['amend']}\n"
-                markdown_content += f"\n## Nội dung\n\n{cleaned_text}"
-                
-                # Lưu file output vào thư mục output/
-                output_path = None
-                try:
-                    import uuid
-                    
-                    # Tạo tên file output
-                    output_filename = f"{uuid.uuid4()}.md"
-                    output_path = config.OUTPUT_FOLDER / output_filename
-                    
-                    # Đảm bảo thư mục output tồn tại
-                    config.OUTPUT_FOLDER.mkdir(parents=True, exist_ok=True)
-                    
-                    # Lưu file
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(markdown_content)
-                    
-                    logger.info(f"Saved output to: {output_path}")
-                    
-                except Exception as save_error:
-                    logger.warning(f"Failed to save output file: {save_error}")
-                    output_path = None
-                
-        except Exception as e:
-            logger.warning(f"Metadata extraction failed: {e}")
-            # Fallback metadata
-            doc_id = extract_doc_id_from_filename(str(Path(file_path).name))
-            metadata = {
-                'doc_id': doc_id,
-                'filename': str(Path(file_path).name),  # Convert to string
-                'file_type': file_type,
-                'source': str(Path(file_path).name)  # Convert to string
-            }
-            
-            # Simple markdown
-            markdown_content = f"# {metadata.get('doc_id', 'Document')}\n\n{cleaned_text}"
-        
-        processing_time = time.time() - start_time
-        
-        return {
-            'success': True,
-            'file_type': file_type,
-            'raw_text': raw_text,
-            'cleaned_text': cleaned_text,
-            'metadata': metadata,
-            'markdown_content': markdown_content,
-            'output_path': str(output_path) if 'output_path' in locals() and output_path else None,
-            'processing_time': processing_time,
-            'stats': {
-                'raw_length': len(raw_text),
-                'cleaned_length': len(cleaned_text),
-                'markdown_length': len(markdown_content),
-                'metadata_fields': len(metadata),
-                'blocks_count': metadata.get('blocks_count', 1)
-            }
-        }
-        
+        import PyPDF2
+        text_parts: List[str] = []
+        with open(file_path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            for page in reader.pages:
+                txt = page.extract_text() or ""
+                if txt:
+                    text_parts.append(txt)
+        return "\n".join(text_parts).strip()
     except Exception as e:
-        logger.error(f"Simple processing failed: {e}")
+        logger.debug(f"_read_pdf_text_pypdf2 failed: {e}")
+        return ""
+
+def _read_pdf_text_pymupdf(file_path: str) -> str:
+    """Read PDF text using PyMuPDF with proper resource cleanup."""
+    try:
+        import fitz
+        text_parts: List[str] = []
+        doc = fitz.open(file_path)
+        try:
+            for i in range(len(doc)):
+                page = doc[i]
+                text_parts.append(page.get_text("text") or "")
+        finally:
+            doc.close()
+        return "\n".join(text_parts).strip()
+    except Exception as e:
+        logger.debug(f"_read_pdf_text_pymupdf failed: {e}")
+        return ""
+
+def _pdf_has_text_layer(file_path: str) -> bool:
+    """Check if PDF has text layer (quick check)."""
+    txt = _read_pdf_text_pymupdf(file_path)
+    return bool(txt and txt.strip())
+
+def _read_text_file(file_path: str) -> str:
+    """Read text file with multiple encoding fallbacks."""
+    encodings = ["utf-8", "utf-8-sig", "cp1252"]
+    for enc in encodings:
+        try:
+            with open(file_path, "r", encoding=enc, errors="replace") as f:
+                return f.read()
+        except Exception as e:
+            logger.debug(f"read_text_file with {enc} failed: {e}")
+    return ""
+
+def _read_docx_text(file_path: str) -> str:
+    """Read DOCX text content."""
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        parts = [p.text for p in doc.paragraphs if p.text]
+        return "\n".join(parts).strip()
+    except Exception as e:
+        logger.debug(f"_read_docx_text failed: {e}")
+        return ""
+
+def _ocr_pdf_with_tesseract(file_path: str, lang: str = "vie+eng", dpi_scale: float = 3.0) -> str:
+    """OCR PDF using Tesseract with proper resource management."""
+    try:
+        import fitz
+        from PIL import Image
+        import pytesseract
+
+        doc = fitz.open(file_path)
+        try:
+            ocr_parts: List[str] = []
+            for i in range(doc.page_count):
+                page = doc[i]
+                mat = fitz.Matrix(dpi_scale, dpi_scale)
+                pix = page.get_pixmap(matrix=mat)
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+                ocr_parts.append(pytesseract.image_to_string(img, lang=lang))
+            return "\n".join(ocr_parts).strip()
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.debug(f"_ocr_pdf_with_tesseract failed: {e}")
+        return ""
+
+def _ocr_image_with_tesseract(file_path: str, lang: str = "vie+eng") -> str:
+    """OCR image using Tesseract."""
+    try:
+        from PIL import Image
+        import pytesseract
+        img = Image.open(file_path)
+        return pytesseract.image_to_string(img, lang=lang).strip()
+    except Exception as e:
+        logger.debug(f"_ocr_image_with_tesseract failed: {e}")
+        return ""
+
+def process_document_simple(file_path: str, options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Process document using simple extraction with fallback methods."""
+    start_time = time.time()
+    output_md_path: Optional[Path] = None
+
+    try:
+        p = Path(file_path)
+        opts = options or {}
+        ocr_enabled = str(opts.get("ocr_enabled", True)).lower() in {"1", "true", "t", "yes", "y", "on"}
+
+        file_type = detect_file_type(p.name)
+        logger.info(f"[simple] file={p.name} type={file_type} ocr={ocr_enabled}")
+
+        raw_text = ""
+
+        # 1) Text-first for PDF
+        if file_type == "pdf":
+            raw_text = _read_pdf_text_pypdf2(file_path)
+            if not raw_text:
+                raw_text = _read_pdf_text_pymupdf(file_path)
+
+        # 2) Plain/text-like files
+        if not raw_text and file_type in {"txt", "html", "xml", "json", "md", "markdown"}:
+            raw_text = _read_text_file(file_path)
+
+        # 3) DOCX
+        if not raw_text and file_type == "docx":
+            raw_text = _read_docx_text(file_path)
+
+        # 4) Legacy .doc (khuyến nghị convert)
+        if not raw_text and file_type == "doc":
+            logger.warning("Legacy .doc not supported. Convert to .docx or enable OCR if scanned.")
+
+        # 5) OCR fallback nếu bật
+        if not raw_text and ocr_enabled and file_type in {"pdf", "image"}:
+            if file_type == "pdf":
+                # Chỉ OCR nếu thực sự không có text layer
+                if not _pdf_has_text_layer(file_path):
+                    raw_text = _ocr_pdf_with_tesseract(file_path)
+                else:
+                    # Đã có text layer mà vẫn rỗng nghĩa là extractor fail; thử thêm PyMuPDF lần nữa
+                    raw_text = _read_pdf_text_pymupdf(file_path) or raw_text
+            else:
+                raw_text = _ocr_image_with_tesseract(file_path)
+
+        # 6) Nếu vẫn rỗng, trả về marker có hướng dẫn
+        if not raw_text or not raw_text.strip():
+            marker = "[Scanned or unsupported document - no text extracted]"
+            raw_text = f"{marker}\nFile: {p.name}\nType: {file_type}"
+
+        cleaned_text = raw_text.strip()
+
+        # 7) Metadata & split
+        metadata: Dict[str, Any] = {}
+        markdown_content = ""
+        blocks_count = 1
+
+        try:
+            from src.core.document_splitter import EnhancedVnLegalSplitter
+            splitter = EnhancedVnLegalSplitter(use_llm=True)  # Enable LLM for title generation
+
+            # Ưu tiên API public: nếu không có, vẫn dùng private nhưng bọc try riêng
+            try:
+                doc_metadata = splitter.extract_document_metadata(cleaned_text)  # nếu có
+            except AttributeError:
+                doc_metadata = {}
+                try:
+                    doc_metadata = splitter._extract_document_metadata(cleaned_text)  # fallback private
+                except Exception as e_priv:
+                    logger.debug(f"Private metadata extractor failed: {e_priv}")
+
+            logger.info(f"[splitter] text_len={len(cleaned_text)}")
+            blocks = splitter.split_document(cleaned_text, p.name)
+            blocks_count = len(blocks) if blocks else 0
+            logger.info(f"[splitter] blocks={blocks_count}")
+
+            if blocks_count > 1:
+                metadata = {
+                    "doc_id": getattr(blocks[0], "doc_id", None),
+                    "filename": p.name,
+                    "file_type": file_type,
+                    "source": p.name,
+                    "category": getattr(blocks[0], "category", "training_and_regulations"),
+                    "date": doc_metadata.get("date") if isinstance(doc_metadata, dict) else None,
+                    "department": "Training Department",
+                    "type_data": "markdown",
+                    "blocks_count": blocks_count,
+                }
+                markdown_content = splitter.to_markdown(blocks)
+            else:
+                # Không đủ block, tạo metadata tối thiểu
+                fallback_doc_id = (doc_metadata.get("doc_id") if isinstance(doc_metadata, dict) else None) or extract_doc_id_from_filename(p.name)
+                metadata = {
+                    "doc_id": fallback_doc_id,
+                    "filename": p.name,
+                    "file_type": file_type,
+                    "source": p.name,
+                    "category": "training_and_regulations",
+                    "date": (doc_metadata.get("date") if isinstance(doc_metadata, dict) else None) or "",
+                    "department": "Training Department",
+                    "type_data": "markdown",
+                    "blocks_count": 1,
+                }
+                markdown_content = (
+                    "## Metadata\n"
+                    f"- **doc_id:** {metadata['doc_id']}\n"
+                    f"- **department:** {metadata['department']}\n"
+                    f"- **type_data:** {metadata['type_data']}\n"
+                    f"- **category:** {metadata['category']}\n"
+                    f"- **date:** {metadata['date']}\n"
+                    f"- **source:** {metadata['source']}\n\n"
+                    f"## Nội dung\n\n{cleaned_text}"
+                )
+
+        except Exception as split_err:
+            logger.warning(f"Metadata/split failed: {split_err}")
+            fallback_doc_id = extract_doc_id_from_filename(p.name)
+            metadata = {
+                "doc_id": fallback_doc_id,
+                "filename": p.name,
+                "file_type": file_type,
+                "source": p.name,
+                "category": "training_and_regulations",
+                "date": "",
+                "data_type": "markdown",
+                "blocks_count": 1,
+            }
+            markdown_content = f"# {fallback_doc_id or 'Document'}\n\n{cleaned_text}"
+
+        # 8) Ghi output MD
+        try:
+            out_dir: Path = getattr(config, "OUTPUT_FOLDER", Path("output"))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            output_md_path = out_dir / f"{uuid.uuid4()}.md"
+            with open(output_md_path, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+            logger.info(f"[simple] saved: {output_md_path}")
+        except Exception as save_err:
+            logger.warning(f"Save markdown failed: {save_err}")
+            output_md_path = None
+
+        processing_time = time.time() - start_time
         return {
-            'success': False,
-            'error': str(e),
-            'processing_time': time.time() - start_time if 'start_time' in locals() else 0
+            "success": True,
+            "file_type": file_type,
+            "raw_text": raw_text,
+            "cleaned_text": cleaned_text,
+            "content": cleaned_text,  # Add content field for API compatibility
+            "metadata": metadata,
+            "markdown_content": markdown_content,
+            "output_path": str(output_md_path) if output_md_path else None,
+            "processing_time": processing_time,
+            "stats": {
+                "raw_length": len(raw_text),
+                "cleaned_length": len(cleaned_text),
+                "markdown_length": len(markdown_content),
+                "blocks_count": int(metadata.get("blocks_count", 1)),
+                "has_ocr": bool(ocr_enabled),
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Simple processing failed: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "processing_time": time.time() - start_time if "start_time" in locals() else 0,
         }
 
 def format_file_size(size_bytes: int) -> str:

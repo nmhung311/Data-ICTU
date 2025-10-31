@@ -78,3 +78,24 @@ api_result.json
 test_*.py
 test_*.md
 test_*.txt
+
+# API Keys and sensitive files
+.env
+*.env
+.env.local
+.env.*.local
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Output files (user generated)
+input.md
+output.md
+output_test.md

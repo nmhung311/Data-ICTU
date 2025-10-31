@@ -8,10 +8,13 @@ API endpoints and route handlers
 import os
 import logging
 import uuid
+import mimetypes
+import markdown
+import datetime
 from typing import Union
 from pathlib import Path
 from io import BytesIO
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, abort
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -24,6 +27,75 @@ from .utils import (
 from ..api.metadata_routes import register_metadata_routes
 
 logger = logging.getLogger(__name__)
+
+# Thư mục gốc an toàn chứa file nguồn
+SAFE_BASE_DIR = Path(getattr(config, "UPLOAD_FOLDER", "uploads")).resolve()
+
+def normalize_file_path(raw_path: str) -> Path:
+    """
+    Normalize file path from database to work in Docker container.
+    Handles Windows paths that need to be converted to container paths.
+    """
+    raw_path_str = str(raw_path)
+    
+    # Convert Windows path to container path if needed
+    if '\\' in raw_path_str:
+        # Windows path detected, extract filename using string split
+        # Handle both pure Windows paths and mixed paths
+        # Split by backslash and take the last part (filename)
+        parts = raw_path_str.replace('/', '\\').split('\\')
+        filename = parts[-1] if parts else raw_path_str.split('/')[-1]
+        
+        # If filename is empty or same as original, try alternative method
+        if not filename or filename == raw_path_str:
+            # Try to extract from the end after last separator
+            import re
+            # Match filename with extension at the end
+            match = re.search(r'([^\\/]+\.\w+)$', raw_path_str)
+            if match:
+                filename = match.group(1)
+            else:
+                # Last resort: use whole string as filename
+                filename = raw_path_str
+        
+        file_path = config.UPLOAD_FOLDER / filename
+        logger.info(f"Converted Windows path {raw_path} to container path {file_path}")
+    else:
+        file_path = Path(raw_path)
+    
+    # Resolve path
+    try:
+        file_path = file_path.resolve()
+    except (OSError, RuntimeError):
+        # If resolve fails (e.g., Windows path in Linux), try relative to UPLOAD_FOLDER
+        if not file_path.is_absolute():
+            file_path = config.UPLOAD_FOLDER / file_path
+        else:
+            # Try extracting just the filename again
+            raw_path_str = str(raw_path)
+            if '\\' in raw_path_str:
+                parts = raw_path_str.replace('/', '\\').split('\\')
+                filename = parts[-1] if parts else raw_path_str.split('/')[-1]
+            else:
+                filename = Path(raw_path).name
+            file_path = config.UPLOAD_FOLDER / filename
+    
+    return file_path
+# Calculate frontend directory - use absolute path from __file__
+# __file__ = .../web-app/backend/src/utils/routes.py
+# frontend = .../web-app/frontend
+FRONTEND_DIR = (Path(__file__).parent.parent.parent.parent / "frontend").resolve()
+logger.info(f"FRONTEND_DIR resolved to: {FRONTEND_DIR}, exists: {FRONTEND_DIR.exists()}")
+
+MIME_MAP = {
+    "pdf": "application/pdf",
+    "txt": "text/plain; charset=utf-8",
+    "md":  "text/markdown; charset=utf-8",
+    "markdown": "text/markdown; charset=utf-8",
+    "html": "text/html; charset=utf-8",
+    "xml": "application/xml; charset=utf-8",
+    "json": "application/json; charset=utf-8",
+}
 
 def _detect_tesseract() -> bool:
     """Detect if tesseract is available"""
@@ -326,19 +398,88 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
             safe_name = secure_filename(original_name) or 'file'
             file_type = detect_file_type(safe_name)
             
-            # Generate unique filename
-            dest_name = f"{uuid.uuid4().hex}.{file_type}"
+            # Get original extension
+            original_ext = Path(original_name).suffix.lower() if original_name else '.unknown'
+            if not original_ext or original_ext == '.':
+                original_ext = '.unknown'
+            
+            # Generate unique filename with original extension
+            dest_name = f"{uuid.uuid4().hex}{original_ext}"
             dest_path = Path(config.UPLOAD_FOLDER) / dest_name
             file.save(str(dest_path))
             
             # Save file info to database
-            file_id = db_manager.save_file({
+            file_id = db_manager.save_source({
                 'filename': original_name,
                 'stored_filename': dest_name,
                 'file_type': file_type,
                 'file_size': validation['file_size'],
                 'file_path': str(dest_path)
             })
+            
+            # Auto-process metadata if enabled
+            if config.METADATA_EXTRACTION_ENABLED:
+                try:
+                    logger.info(f"Auto-processing metadata for source: {file_id}")
+
+                    file_info = db_manager.get_source(file_id)
+                    if file_info:
+                        file_path = normalize_file_path(file_info['file_path'])
+                        if file_path.exists():
+                            from .utils import process_document_simple
+                            from src.core.document_splitter import EnhancedVnLegalSplitter
+                            from src.core.category_classifier import classify_by_filename
+
+                            result = process_document_simple(
+                                str(file_path),
+                                options={'ocr_enabled': config.OCR_ENABLED}
+                            )
+                            if result and result.get('success'):
+                                text_for_split = result.get('cleaned_text') or result.get('raw_text') or ''
+                                if text_for_split:
+                                    splitter = EnhancedVnLegalSplitter(use_llm=True)  # Enable LLM for title generation
+                                    filename = file_info.get('filename', '')
+                                    blocks = splitter.split_document(text_for_split, filename)
+
+                                    if blocks:
+                                        with db_manager.get_connection() as conn:
+                                            cursor = conn.cursor()
+                                            saved_blocks = 0
+                                            for block in blocks:
+                                                try:
+                                                    final_category = classify_by_filename(filename)
+                                                    cursor.execute("""
+                                                        INSERT INTO metadata_blocks 
+                                                        (id, doc_id, department, type_data, category, content, source, date, created_at)
+                                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                                    """, (
+                                                        str(uuid.uuid4()),
+                                                        file_id,
+                                                        getattr(block, 'department', 'Training Department'),
+                                                        getattr(block, 'type_data', 'markdown'),
+                                                        final_category,
+                                                        getattr(block, 'content', ''),
+                                                        getattr(block, 'source', filename),
+                                                        getattr(block, 'date', '')
+                                                    ))
+                                                    saved_blocks += 1
+                                                except Exception as block_error:
+                                                    logger.warning(f"Failed to save block: {block_error}")
+                                                    continue
+                                            conn.commit()
+                                        logger.info(f"Enhanced metadata processed: {saved_blocks}/{len(blocks)} blocks")
+                                    else:
+                                        logger.warning(f"No blocks created by EnhancedVnLegalSplitter for source: {file_id}")
+                                else:
+                                    logger.warning(f"No text extracted for splitting: {file_id}")
+                            else:
+                                logger.warning(f"Document processing failed for source: {file_id}")
+                        else:
+                            logger.warning(f"File path not found for file_id: {file_id}")
+                    else:
+                        logger.warning(f"File info not found for file_id: {file_id}")
+                except Exception as e:
+                    logger.error(f"Auto metadata processing failed for source {file_id}: {e}")
             
             logger.info(f"Source uploaded successfully: {original_name} -> {dest_name}")
             return jsonify({
@@ -358,12 +499,12 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
         """Delete a source file"""
         try:
             # Get file info from database
-            file_info = db_manager.get_file(source_id)
+            file_info = db_manager.get_source(source_id)
             if not file_info:
                 return jsonify({'success': False, 'error': 'Source not found'}), 404
             
             # Delete physical file
-            file_path = Path(file_info['file_path'])
+            file_path = normalize_file_path(file_info['file_path'])
             if file_path.exists():
                 try:
                     file_path.unlink()
@@ -372,7 +513,7 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
                     logger.warning(f"Failed to delete file {file_path}: {e}")
             
             # Delete from database
-            db_manager.delete_file(source_id)
+            db_manager.delete_source(source_id)
             
             logger.info(f"Source deleted successfully: {file_info['filename']}")
             return jsonify({'success': True, 'message': 'Source deleted successfully'})
@@ -381,6 +522,116 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
             logger.exception(f"Failed to delete source {source_id}")
             return jsonify({'success': False, 'error': str(e)}), 500
     
+    @app.route('/api/sources/<source_id>/generate-metadata', methods=['POST'])
+    def generate_metadata(source_id: str) -> Union[Response, tuple]:
+        """Generate metadata blocks for a source file"""
+        try:
+            print(f"\n{'='*60}")
+            print(f"[START] Metadata generation requested")
+            print(f"  - Source ID: {source_id}")
+            print(f"{'='*60}")
+            logger.info(f"Manual metadata generation requested for source: {source_id}")
+            
+            # Get source info from database
+            file_info = db_manager.get_source(source_id)
+            if not file_info:
+                logger.warning(f"File info not found for file_id: {source_id}")
+                return jsonify({'success': False, 'error': 'Source not found'}), 404
+            
+            # Normalize path from database (handle Windows paths in Docker)
+            raw_path = file_info['file_path']
+            file_path = normalize_file_path(raw_path)
+            
+            if not file_path.exists():
+                logger.warning(f"File path not found for file_id: {source_id}, tried: {file_path}, original: {raw_path}")
+                return jsonify({'success': False, 'error': f'File not found: {file_path}'}), 404
+            
+            # Process the file to extract metadata using enhanced modules
+            from .utils import process_document_simple
+            from src.core.document_splitter import EnhancedVnLegalSplitter
+            from src.core.category_classifier import classify_by_filename
+            
+            # Process document
+            result = process_document_simple(
+                str(file_path),
+                options={'ocr_enabled': config.OCR_ENABLED}
+            )
+            
+            if result and result.get('success'):
+                # Get extracted content
+                text_for_split = result.get('cleaned_text') or result.get('raw_text') or ''
+                if not text_for_split:
+                    return jsonify({'success': False, 'error': 'No content could be extracted from the file'}), 400
+                
+                # Use EnhancedVnLegalSplitter to create proper blocks
+                print(f"[PROCESS] Starting document processing...")
+                print(f"  - File: {file_info.get('filename', 'unknown')}")
+                print(f"  - Text length: {len(text_for_split)}")
+                splitter = EnhancedVnLegalSplitter(use_llm=True)  # Enable LLM for title generation
+                filename = file_info.get('filename', '')
+                
+                # Split document into legal blocks
+                blocks = splitter.split_document(text_for_split, filename)
+                print(f"[PROCESS] Document split into {len(blocks)} blocks")
+                
+                if blocks:
+                    # Clear existing metadata blocks for this source
+                    with db_manager.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM metadata_blocks WHERE doc_id = ?", (source_id,))
+                        
+                        # Save new blocks to database
+                        saved_blocks = 0
+                        
+                        for block in blocks:
+                            try:
+                                # Use category classifier for better categorization
+                                final_category = classify_by_filename(filename)
+                                
+                                cursor.execute("""
+                                    INSERT INTO metadata_blocks 
+                                    (id, doc_id, department, type_data, category, content, source, date, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                """, (
+                                    str(uuid.uuid4()),
+                                    block.doc_id,  # Use actual doc_id from document content, not source_id
+                                    block.department,
+                                    block.type_data,
+                                    final_category,
+                                    block.content,
+                                    block.source,
+                                    block.date
+                                ))
+                                saved_blocks += 1
+                            except Exception as block_error:
+                                logger.warning(f"Failed to save block: {block_error}")
+                                continue
+                        
+                        conn.commit()
+                    
+                    print(f"\n{'='*60}")
+                    print(f"[SUCCESS] Metadata generation completed!")
+                    print(f"  - Source ID: {source_id}")
+                    print(f"  - Blocks created: {saved_blocks}")
+                    print(f"  - Response: 200 OK")
+                    print(f"{'='*60}\n")
+                    logger.info(f"Manual metadata generation successful: {saved_blocks} blocks created from {len(blocks)} split blocks")
+                    return jsonify({
+                        'success': True,
+                        'message': f'Generated {saved_blocks} metadata blocks',
+                        'blocks_count': saved_blocks
+                    })
+                else:
+                    logger.warning(f"No blocks created by EnhancedVnLegalSplitter for source: {source_id}")
+                    return jsonify({'success': False, 'error': 'No blocks could be generated from the document'}), 400
+            else:
+                logger.warning(f"Document processing failed for source: {source_id}")
+                return jsonify({'success': False, 'error': 'Failed to process the document'}), 400
+                
+        except Exception as e:
+            logger.error(f"Manual metadata generation failed for source {source_id}: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     @app.route('/api/sources/<source_id>', methods=['PUT'])
     def rename_source(source_id: str) -> Union[Response, tuple]:
         """Rename a source file"""
@@ -394,7 +645,7 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
                 return jsonify({'success': False, 'error': 'New name cannot be empty'}), 400
             
             # Get file info from database
-            file_info = db_manager.get_file(source_id)
+            file_info = db_manager.get_source(source_id)
             if not file_info:
                 return jsonify({'success': False, 'error': 'Source not found'}), 404
             
@@ -416,7 +667,7 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
             if err_resp:
                 return err_resp, code
             
-            files = db_manager.list_files(limit, offset)
+            files = db_manager.list_sources(limit=limit, offset=offset)
             return jsonify({'sources': files, 'limit': limit, 'offset': offset})
         except Exception as e:
             logger.exception("Failed to list sources")
@@ -427,11 +678,11 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
         """Get source file info for display"""
         try:
             # Get file info from database
-            file_info = db_manager.get_file(source_id)
+            file_info = db_manager.get_source(source_id)
             if not file_info:
                 return jsonify({'success': False, 'error': 'Source not found'}), 404
             
-            file_path = Path(file_info['file_path'])
+            file_path = normalize_file_path(file_info['file_path'])
             if not file_path.exists():
                 return jsonify({'success': False, 'error': 'File not found on disk'}), 404
             
@@ -475,33 +726,138 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
             return jsonify({'success': False, 'error': str(e)}), 500
     
     @app.route('/api/sources/<source_id>/content', methods=['GET'])
-    def get_source_content(source_id: str) -> Union[Response, tuple]:
-        """Serve source file content directly"""
+    def get_source_content(source_id: str):
+        """Serve source file content directly, with optional Markdown->HTML render."""
         try:
-            # Get file info from database
-            file_info = db_manager.get_file(source_id)
+            logger.info(f"[NEW ROUTE] Getting content for source: {source_id}")
+
+            # 1) DB lookup
+            file_info = db_manager.get_source(source_id)
             if not file_info:
+                logger.error(f"Source not found: {source_id}")
                 return jsonify({'success': False, 'error': 'Source not found'}), 404
+
+            # Normalize path from database (handle Windows paths in Docker)
+            raw_path = file_info['file_path']
+            file_path = normalize_file_path(raw_path)
+            file_type = file_info.get('file_type', '').lower().strip()
+
+            # 2) Path safety: chặn traversal - improved check
+            # Normalize both paths for comparison
+            safe_base_normalized = SAFE_BASE_DIR.resolve()
             
-            file_path = Path(file_info['file_path'])
+            # Try to normalize file_path, but handle errors gracefully
+            try:
+                file_path_normalized = file_path.resolve()
+            except (OSError, RuntimeError) as e:
+                # If resolve fails, try using filename directly from UPLOAD_FOLDER
+                logger.warning(f"Could not resolve path {file_path}, trying filename lookup: {e}")
+                filename = Path(raw_path).name
+                file_path = config.UPLOAD_FOLDER / filename
+                try:
+                    file_path_normalized = file_path.resolve()
+                except (OSError, RuntimeError):
+                    file_path_normalized = file_path  # Use as-is if resolve still fails
+            
+            # Check if file is within safe base directory using relative path
+            try:
+                relative = file_path_normalized.relative_to(safe_base_normalized)
+                # Check for path traversal (.. in relative path means it's outside)
+                if '..' in str(relative):
+                    logger.error(f"Path traversal detected: {file_path_normalized}")
+                    return jsonify({'success': False, 'error': 'Forbidden'}), 403
+            except ValueError:
+                # Not a subpath, check if it's the same directory or a direct file in uploads
+                if file_path_normalized.parent != safe_base_normalized and file_path_normalized != safe_base_normalized:
+                    # Try one more check: if filename matches and exists in UPLOAD_FOLDER
+                    filename = file_path_normalized.name if hasattr(file_path_normalized, 'name') else Path(str(file_path_normalized)).name
+                    alt_path = safe_base_normalized / filename
+                    if alt_path.exists():
+                        logger.info(f"Using alternative path: {alt_path}")
+                        file_path = alt_path
+                        file_path_normalized = alt_path
+                    else:
+                        logger.error(f"Unsafe path access blocked: {file_path_normalized} (safe_base: {safe_base_normalized})")
+                        return jsonify({'success': False, 'error': 'Forbidden'}), 403
+
             if not file_path.exists():
+                logger.error(f"File not found on disk: {file_path}")
                 return jsonify({'success': False, 'error': 'File not found on disk'}), 404
-            
-            file_type = file_info['file_type'].lower()
-            
+
+            logger.info(f"Serving {file_type} at {file_path}")
+
+            # 3) PDF: trả trực tiếp để nhúng iframe
             if file_type == 'pdf':
-                # For PDF, serve file directly for iframe
                 return send_file(
                     str(file_path),
                     as_attachment=False,
-                    mimetype='application/pdf'
+                    mimetype=MIME_MAP['pdf'],
+                    conditional=True,        # ETag/If-Modified-Since
+                    download_name=file_path.name
                 )
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': f'Unsupported file type: {file_type}'
-                }), 400
-                
+
+            # 4) Markdown/text: hai mode
+            #    - render=html => convert sang HTML và trả text/html
+            #    - render=raw (mặc định) => trả đúng text/markdown hoặc text/plain
+            if file_type in ['txt', 'md', 'markdown', 'html', 'xml', 'json']:
+                render_mode = request.args.get('render', 'raw').lower()
+
+                # Chọn MIME hợp lệ
+                mimetype = MIME_MAP.get(file_type) or mimetypes.guess_type(file_path.name)[0] or 'text/plain; charset=utf-8'
+
+                # HTML file: nếu render=raw thì serve trực tiếp, nếu render=html cũng thế
+                if file_type == 'html':
+                    return send_file(
+                        str(file_path),
+                        as_attachment=False,
+                        mimetype=mimetype,
+                        conditional=True,
+                        download_name=file_path.name
+                    )
+
+                # Đọc nội dung text (an toàn encoding)
+                try:
+                    content = file_path.read_text(encoding='utf-8', errors='strict')
+                except UnicodeDecodeError:
+                    # Đừng ngã lăn, thay bằng replace để giữ hiển thị
+                    content = file_path.read_text(encoding='utf-8', errors='replace')
+
+                # Markdown -> HTML nếu được yêu cầu
+                if file_type in ['md', 'markdown'] and render_mode in ['html', 'view', 'render']:
+                    html = markdown.markdown(
+                        content,
+                        extensions=["extra", "toc", "tables", "fenced_code"]
+                    )
+                    # Bọc HTML tối giản cho trình duyệt
+                    doc = f"""<!doctype html><meta charset="utf-8">
+                    <style>
+                    html,body{{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;line-height:1.6}}
+                    body{{max-width:900px;margin:40px auto;padding:0 16px}}
+                    pre,code{{font-family:ui-monospace,Menlo,Consolas,monospace}}
+                    pre{{overflow:auto;padding:12px;border:1px solid #eee;border-radius:8px;background:#fafafa}}
+                    table{{border-collapse:collapse}} td,th{{border:1px solid #ddd;padding:6px 10px}}
+                    </style>{html}"""
+                    resp = Response(doc, mimetype="text/html; charset=utf-8")
+                else:
+                    # Trả thô: text/markdown hoặc text/plain
+                    resp = Response(content, mimetype=mimetype)
+
+                # Cache nhẹ 60s cho đỡ nghẽn
+                resp.headers["Cache-Control"] = "public, max-age=60"
+                resp.headers["X-Content-Type-Options"] = "nosniff"
+                return resp
+
+            # 5) Loại khác: fallback trả file binary inline
+            guessed = mimetypes.guess_type(file_path.name)[0] or 'application/octet-stream'
+            logger.warning(f"Unsupported/other file type '{file_type}', serving as {guessed}")
+            return send_file(
+                str(file_path),
+                as_attachment=False,
+                mimetype=guessed,
+                conditional=True,
+                download_name=file_path.name
+            )
+
         except Exception as e:
             logger.exception(f"Failed to get source content {source_id}")
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -530,6 +886,34 @@ def register_routes(app: Flask, db_manager: DatabaseManager) -> None:
     
     # Register metadata routes
     register_metadata_routes(app, db_manager)
+    
+    # SPA fallback route - serve index.html for all non-API routes
+    @app.route('/web-app/frontend/<path:path>')
+    def serve_frontend(path):
+        """Serve frontend files with SPA fallback"""
+        target = (FRONTEND_DIR / path).resolve()
+        if FRONTEND_DIR not in target.parents and target != FRONTEND_DIR:
+            return jsonify({'error': 'Forbidden'}), 403
+        if target.exists() and target.is_file():
+            resp = send_file(str(target))
+            resp.headers['Cache-Control'] = 'public, max-age=300'
+            return resp
+        index_path = (FRONTEND_DIR / "index.html")
+        if index_path.exists():
+            resp = send_file(str(index_path))
+            resp.headers['Cache-Control'] = 'public, max-age=60'
+            return resp
+        return jsonify({'error': 'Frontend not found'}), 404
+    
+    @app.route('/web-app/frontend/')
+    def serve_frontend_root():
+        """Serve frontend root"""
+        index_path = (FRONTEND_DIR / "index.html")
+        if index_path.exists():
+            resp = send_file(str(index_path))
+            resp.headers['Cache-Control'] = 'public, max-age=60'
+            return resp
+        return jsonify({'error': 'Frontend not found'}), 404
     
     # Suppress linter warnings about unused functions
     # These functions are accessed by Flask's routing system via decorators

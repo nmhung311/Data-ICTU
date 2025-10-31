@@ -31,7 +31,9 @@ class Config:
     DEBUG = _env_bool('FLASK_DEBUG', False)  # FLASK_ENV đã deprecated
 
     # Database Configuration
-    DATA_DIR = PROJECT_ROOT / 'data'
+    # Trong Docker: dùng /app/data (mount từ ../data)
+    # Trong local: dùng PROJECT_ROOT/data
+    DATA_DIR = Path(os.environ.get('DATA_DIR', str(PROJECT_ROOT / 'data')))
     DATABASE_PATH = DATA_DIR / 'raw2md_agent.db'
 
     # File Upload Configuration
@@ -45,10 +47,10 @@ class Config:
 
     # Processing Configuration
     OCR_ENABLED = _env_bool('OCR_ENABLED', True)
-    METADATA_EXTRACTION_ENABLED = _env_bool('METADATA_EXTRACTION_ENABLED', True)
+    METADATA_EXTRACTION_ENABLED = _env_bool('METADATA_EXTRACTION_ENABLED', False)
 
     # OCR Configuration
-    TESSERACT_PATH = os.environ.get('TESSERACT_PATH', '')  # để trống và auto-detect
+    TESSERACT_PATH = os.environ.get('TESSERACT_PATH', 'D:\\OCR\\tesseract.exe')  # Path to Tesseract executable
     OCR_LANG = os.environ.get('OCR_LANG', 'vie+eng')
     OCR_CONFIDENCE_THRESHOLD = float(os.environ.get('OCR_CONFIDENCE_THRESHOLD', '0.5'))
     TESSERACT_CONFIG = os.environ.get('TESSERACT_CONFIG', '--psm 6 --oem 3')
