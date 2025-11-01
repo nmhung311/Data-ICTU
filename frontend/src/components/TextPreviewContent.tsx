@@ -32,7 +32,8 @@ const TextPreviewContent = ({ file, filepath, filename, onClose }: TextPreviewCo
           // Thử fetch trực tiếp file từ backend uploads folder
           // filepath có thể là "uploads/filename" hoặc chỉ "filename"
           const path = filepath.startsWith('uploads/') ? filepath : `uploads/${filepath}`;
-          const fileResponse = await fetch(`http://localhost:5000/${path}`);
+          const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+          const fileResponse = await fetch(`${apiUrl}/${path}`);
           if (fileResponse.ok) {
             text = await fileResponse.text();
           } else {

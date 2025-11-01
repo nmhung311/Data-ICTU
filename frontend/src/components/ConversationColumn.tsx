@@ -63,7 +63,8 @@ const ConversationColumn = ({ onAddSource, sourcesCount, sources, selectedSource
     setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, content: newPlainText } : m)));
     // Try to PATCH backend if available; ignore errors
     try {
-      await fetch(`http://localhost:5000/api/messages/${encodeURIComponent(msgId)}`, {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      await fetch(`${apiUrl}/api/messages/${encodeURIComponent(msgId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: newPlainText })

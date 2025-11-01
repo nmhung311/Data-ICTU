@@ -67,7 +67,7 @@ interface Source {
   markdown?: string; // Nội dung markdown đã trích xuất
 }
 
-const API_BASE_URL = 'http://localhost:5000/api';
+import { API_BASE_URL } from '@/config/api';
 
 const Index = () => {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);

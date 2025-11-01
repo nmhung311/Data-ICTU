@@ -34,6 +34,8 @@ jobs:
         if: github.event.action != 'closed'
         working-directory: ./frontend
         env:
+          # Sử dụng public backend URL hoặc secret nếu có
+          # Nếu backend chưa public, có thể dùng localhost nhưng sẽ không hoạt động trên preview
           VITE_API_URL: ${{ secrets.VITE_API_URL || 'http://localhost:5000' }}
           GITHUB_ACTIONS: true
           CI: true
