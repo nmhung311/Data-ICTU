@@ -1,11 +1,13 @@
-name: Deploy to GitHub Pages
+name: Manual Deploy to GitHub Pages
 
+# Workflow này cho phép deploy từ bất kỳ branch nào
 on:
-  push:
-    branches:
-      - main
-      - master
-  workflow_dispatch: # Cho phép chạy thủ công
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy'
+        required: true
+        default: 'env-dev'
 
 jobs:
   deploy:
@@ -14,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

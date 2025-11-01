@@ -5,7 +5,7 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: process.env.GITHUB_ACTIONS ? '/Process-Data-chatbot-ICTU/' : '/',
+  base: process.env.GITHUB_ACTIONS || process.env.CI ? '/Process-Data-chatbot-ICTU/' : '/',
   server: {
     host: "::",
     port: 8080,
