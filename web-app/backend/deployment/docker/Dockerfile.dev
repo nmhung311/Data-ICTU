@@ -1,0 +1,42 @@
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libmagic1 \
+    libmagic-dev \
+    tesseract-ocr \
+    tesseract-ocr-vie \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    curl \
+    vim \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Tạo các thư mục cần thiết
+RUN mkdir -p /app/data/uploads /app/data/outputs /app/logs
+
+# Set environment variables
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=development
+ENV PYTHONPATH=/app:/app/../raw2md_agent
+
+# Expose port
+EXPOSE 5000
+
+# Default command (có thể override trong docker-compose)
+CMD ["python", "app.py"]
+
