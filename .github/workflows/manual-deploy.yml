@@ -12,6 +12,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # Timeout sau 10 phút
     
     steps:
       - name: Checkout
@@ -28,10 +29,12 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./frontend
+        timeout-minutes: 5
         run: npm ci
 
       - name: Build frontend
         working-directory: ./frontend
+        timeout-minutes: 5
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL || 'http://localhost:5000' }}
           GITHUB_ACTIONS: true
@@ -39,10 +42,13 @@ jobs:
         run: npm run build
 
       - name: Deploy to GitHub Pages
+        timeout-minutes: 5
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: ./frontend/dist
-          branch: ${{ inputs.branch || 'env-dev' }}  # Deploy vào chính branch đang deploy
+          branch: ${{ inputs.branch || 'env-dev' }}
           clean-exclude: pr-preview/
           force: false
+          git-config-name: "GitHub Actions"
+          git-config-email: "actions@github.com"
 
