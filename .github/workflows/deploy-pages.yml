@@ -38,7 +38,7 @@ jobs:
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: ./frontend/dist
-          branch: gh-pages
+          branch: ${{ github.ref_name }}  # Deploy vào chính branch đang push (main/master)
           clean-exclude: pr-preview/
           force: false
 

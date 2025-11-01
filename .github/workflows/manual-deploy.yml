@@ -42,7 +42,7 @@ jobs:
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: ./frontend/dist
-          branch: gh-pages
+          branch: ${{ inputs.branch || 'env-dev' }}  # Deploy vào chính branch đang deploy
           clean-exclude: pr-preview/
           force: false
 
