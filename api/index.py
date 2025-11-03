@@ -6,6 +6,9 @@ Vercel Python runtime tự động detect WSGI application
 import sys
 import os
 
+# Set Vercel environment variable để backend có thể detect
+os.environ['VERCEL'] = '1'
+
 # Thêm backend vào Python path
 backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backend'))
 if backend_path not in sys.path:
