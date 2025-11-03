@@ -11,6 +11,7 @@ services:
       - ./backend/documents.db:/app/documents.db
       - ./backend/gen_meta:/app/gen_meta
     environment:
+      - FLASK_APP=app.py
       - FLASK_ENV=production
       - FLASK_DEBUG=0
       - OPENAI_API_KEY=${OPENAI_API_KEY}

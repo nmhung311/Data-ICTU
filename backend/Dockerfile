@@ -25,6 +25,10 @@ COPY . .
 # Tạo thư mục uploads nếu chưa có
 RUN mkdir -p uploads
 
+# Set environment variables cho Flask
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+
 # Expose port 5000
 EXPOSE 5000
 
