@@ -3,7 +3,13 @@ import os
 from datetime import datetime
 from typing import Optional, Dict
 
-DB_PATH = 'documents.db'
+# Vercel có read-only filesystem, cần dùng /tmp cho database
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    # Trên Vercel hoặc server có /tmp writable
+    DB_PATH = '/tmp/documents.db'
+else:
+    # Local development hoặc server thông thường
+    DB_PATH = 'documents.db'
 
 def init_db():
     """Khởi tạo database và tạo bảng nếu chưa tồn tại"""
