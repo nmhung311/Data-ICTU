@@ -8,6 +8,12 @@ File này chỉ import và export app từ backend/app.py
 import sys
 import os
 
+# Set Vercel environment variable TRƯỚC KHI import backend
+# Detect Vercel bằng cách kiểm tra /var/task (Vercel's working directory)
+if '/var/task' in os.getcwd() or '/var/task' in str(__file__):
+    os.environ['VERCEL'] = '1'
+    print("🔍 Vercel environment detected in root app.py")
+
 # Thay đổi working directory về backend để các relative path hoạt động đúng
 backend_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'backend'))
 original_cwd = os.getcwd()
