@@ -56,37 +56,25 @@ CORS(app)  # Cho phép frontend gọi API
 
 # Thư mục lưu file upload
 # Vercel có read-only filesystem, cần dùng /tmp
-# Detect Vercel environment bằng nhiều cách
-VERCEL_ENV = os.environ.get('VERCEL', '').lower() == '1'
-VERCEL_REGION = os.environ.get('VERCEL_REGION', '') != ''
-IS_LAMBDA_LIKE = '/var/task' in str(__file__) or '/var/task' in os.getcwd()
-IS_VERCEL = VERCEL_ENV or VERCEL_REGION or IS_LAMBDA_LIKE
+# Detect Vercel bằng cách kiểm tra /var/task (Vercel's working directory)
+IS_VERCEL = '/var/task' in os.getcwd() or '/var/task' in str(__file__) or os.environ.get('VERCEL', '').lower() == '1'
 
-# Luôn dùng /tmp trên Vercel, uploads/ cho local
+# Luôn dùng /tmp/uploads trên Vercel NGAY TỪ ĐẦU, không thử uploads/
 if IS_VERCEL:
     UPLOAD_FOLDER = '/tmp/uploads'
-    print(f"🔍 Vercel environment detected, using: {UPLOAD_FOLDER}")
+    print(f"🔍 Vercel detected - using /tmp/uploads")
 else:
     UPLOAD_FOLDER = 'uploads'
-
-# Chỉ tạo thư mục nếu có thể write - KHÔNG fail nếu không thể tạo
-try:
-    if not os.path.exists(UPLOAD_FOLDER):
-        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-        print(f"✅ Created uploads folder: {UPLOAD_FOLDER}")
-except (OSError, PermissionError) as e:
-    # Nếu không thể tạo, thử /tmp/uploads
-    if UPLOAD_FOLDER != '/tmp/uploads':
-        UPLOAD_FOLDER = '/tmp/uploads'
-        try:
+    # Chỉ tạo thư mục trên local, KHÔNG tạo trên Vercel
+    try:
+        if not os.path.exists(UPLOAD_FOLDER):
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-            print(f"✅ Created fallback uploads folder: {UPLOAD_FOLDER}")
-        except Exception as e2:
-            print(f"⚠️ Cannot create uploads folder at {UPLOAD_FOLDER}: {e2}")
-            # Vẫn set UPLOAD_FOLDER, nhưng sẽ fail khi upload file
-    else:
+            print(f"✅ Created uploads folder: {UPLOAD_FOLDER}")
+    except (OSError, PermissionError) as e:
         print(f"⚠️ Cannot create uploads folder: {e}")
-        # Vẫn tiếp tục, sẽ fail khi upload
+
+# Trên Vercel, không tạo thư mục ngay - sẽ tạo khi upload file
+# Điều này tránh lỗi khi import module
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
@@ -402,7 +390,16 @@ def upload_pdf():
     
     # Lưu file
     filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    upload_folder = app.config['UPLOAD_FOLDER']
+    
+    # Đảm bảo thư mục tồn tại trước khi save (trên Vercel sẽ dùng /tmp/uploads)
+    try:
+        if not os.path.exists(upload_folder):
+            os.makedirs(upload_folder, exist_ok=True)
+    except (OSError, PermissionError):
+        pass  # Trên Vercel /tmp/uploads sẽ tự có
+    
+    filepath = os.path.join(upload_folder, filename)
     file.save(filepath)
     
     # Tự động trích xuất text (xử lý cả PDF và các file khác)
