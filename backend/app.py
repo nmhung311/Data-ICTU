@@ -56,32 +56,37 @@ CORS(app)  # Cho phép frontend gọi API
 
 # Thư mục lưu file upload
 # Vercel có read-only filesystem, cần dùng /tmp
-# Detect Vercel environment bằng cách kiểm tra /var/task (Vercel's working directory)
-IS_VERCEL = '/var/task' in os.getcwd() or os.environ.get('VERCEL', '').lower() == '1'
+# Detect Vercel environment bằng nhiều cách
+VERCEL_ENV = os.environ.get('VERCEL', '').lower() == '1'
+VERCEL_REGION = os.environ.get('VERCEL_REGION', '') != ''
+IS_LAMBDA_LIKE = '/var/task' in str(__file__) or '/var/task' in os.getcwd()
+IS_VERCEL = VERCEL_ENV or VERCEL_REGION or IS_LAMBDA_LIKE
 
+# Luôn dùng /tmp trên Vercel, uploads/ cho local
 if IS_VERCEL:
-    # Trên Vercel, luôn dùng /tmp
     UPLOAD_FOLDER = '/tmp/uploads'
+    print(f"🔍 Vercel environment detected, using: {UPLOAD_FOLDER}")
 else:
-    # Local development hoặc server thông thường
     UPLOAD_FOLDER = 'uploads'
 
-# Chỉ tạo thư mục nếu có thể write
+# Chỉ tạo thư mục nếu có thể write - KHÔNG fail nếu không thể tạo
 try:
     if not os.path.exists(UPLOAD_FOLDER):
         os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        print(f"✅ Created uploads folder: {UPLOAD_FOLDER}")
 except (OSError, PermissionError) as e:
-    # Nếu không thể tạo thư mục, thử /tmp
-    if UPLOAD_FOLDER != '/tmp/uploads' and os.path.exists('/tmp'):
+    # Nếu không thể tạo, thử /tmp/uploads
+    if UPLOAD_FOLDER != '/tmp/uploads':
         UPLOAD_FOLDER = '/tmp/uploads'
         try:
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-        except:
-            # Nếu vẫn không được, không tạo thư mục và sẽ fail khi upload
-            print(f"⚠️ Không thể tạo uploads folder tại: {UPLOAD_FOLDER}")
-            UPLOAD_FOLDER = '/tmp'  # Fallback về /tmp
+            print(f"✅ Created fallback uploads folder: {UPLOAD_FOLDER}")
+        except Exception as e2:
+            print(f"⚠️ Cannot create uploads folder at {UPLOAD_FOLDER}: {e2}")
+            # Vẫn set UPLOAD_FOLDER, nhưng sẽ fail khi upload file
     else:
-        print(f"⚠️ Không thể tạo uploads folder: {e}")
+        print(f"⚠️ Cannot create uploads folder: {e}")
+        # Vẫn tiếp tục, sẽ fail khi upload
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
