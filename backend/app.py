@@ -57,24 +57,23 @@ CORS(app)  # Cho phép frontend gọi API
 # Thư mục lưu file upload
 # Vercel có read-only filesystem, cần dùng /tmp
 # Detect Vercel bằng cách kiểm tra /var/task (Vercel's working directory)
-IS_VERCEL = '/var/task' in os.getcwd() or '/var/task' in str(__file__) or os.environ.get('VERCEL', '').lower() == '1'
+# HOẶC kiểm tra VERCEL env var (được set trong app.py hoặc api/index.py)
+IS_VERCEL = os.environ.get('VERCEL', '').lower() == '1' or '/var/task' in str(os.getcwd())
 
-# Luôn dùng /tmp/uploads trên Vercel NGAY TỪ ĐẦU, không thử uploads/
+# Luôn dùng /tmp/uploads trên Vercel NGAY TỪ ĐẦU
+# KHÔNG TẠO THƯ MỤC KHI IMPORT - chỉ tạo khi upload file
 if IS_VERCEL:
     UPLOAD_FOLDER = '/tmp/uploads'
-    print(f"🔍 Vercel detected - using /tmp/uploads")
+    print(f"🔍 Vercel detected - using /tmp/uploads (will create on first upload)")
 else:
     UPLOAD_FOLDER = 'uploads'
-    # Chỉ tạo thư mục trên local, KHÔNG tạo trên Vercel
-    try:
-        if not os.path.exists(UPLOAD_FOLDER):
+    # Chỉ tạo thư mục trên local development
+    if not os.path.exists(UPLOAD_FOLDER):
+        try:
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
             print(f"✅ Created uploads folder: {UPLOAD_FOLDER}")
-    except (OSError, PermissionError) as e:
-        print(f"⚠️ Cannot create uploads folder: {e}")
-
-# Trên Vercel, không tạo thư mục ngay - sẽ tạo khi upload file
-# Điều này tránh lỗi khi import module
+        except (OSError, PermissionError) as e:
+            print(f"⚠️ Cannot create uploads folder: {e}")
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
