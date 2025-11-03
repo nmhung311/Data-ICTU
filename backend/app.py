@@ -55,9 +55,27 @@ app = Flask(__name__)
 CORS(app)  # Cho phép frontend gọi API
 
 # Thư mục lưu file upload
-UPLOAD_FOLDER = 'uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+# Vercel có read-only filesystem, cần dùng /tmp
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    # Trên Vercel hoặc server có /tmp writable
+    UPLOAD_FOLDER = '/tmp/uploads'
+else:
+    # Local development hoặc server thông thường
+    UPLOAD_FOLDER = 'uploads'
+
+# Chỉ tạo thư mục nếu có thể write
+try:
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+except (OSError, PermissionError) as e:
+    # Nếu không thể tạo thư mục (như Vercel read-only), dùng /tmp
+    if UPLOAD_FOLDER != '/tmp/uploads':
+        UPLOAD_FOLDER = '/tmp/uploads'
+        try:
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        except:
+            pass  # Nếu vẫn không được, sẽ fail khi upload
+    print(f"⚠️ Không thể tạo uploads folder, dùng: {UPLOAD_FOLDER}")
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
