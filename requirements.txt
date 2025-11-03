@@ -1,56 +1,9 @@
-# Raw2MD Agent - Production Dependencies
-
-# Web Framework (for API)
-flask>=3.0.0
-flask-cors>=4.0.0
-werkzeug>=3.0.0
-
-# Core Document Processing
-PyMuPDF>=1.23.0
-python-docx>=0.8.11
-html2text>=2020.1.16
-pandas>=2.0.0
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
-Pillow>=10.0.0
-
-# OCR Engines (GPU-accelerated)
-paddleocr>=2.7.0
-paddlepaddle>=2.5.0
-pytesseract>=0.3.10
-protobuf>=3.19.0,<4.0.0
-
-# Text Processing & Encoding
-chardet>=5.0.0
-spacy>=3.6.0
-
-# Task Queue & Distributed Processing
-celery>=5.3.0
-redis>=4.6.0
-ray>=2.8.0
-
-# Async I/O
-aiofiles>=23.0.0
-
-# LLM Integration (Gemini 2.5 Flash)
-google-generativeai>=0.3.0
-tiktoken>=0.5.0
-
-# Storage & Monitoring
-minio>=7.1.0
-prometheus-client>=0.17.0
-flower>=2.0.0
-
-# Configuration & Validation
-pydantic>=2.0.0
-python-dotenv>=1.0.0
-tqdm>=4.65.0
-
-# Development Dependencies (optional)
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
-black>=23.0.0
-isort>=5.12.0
-flake8>=6.0.0
-mypy>=1.0.0
-
+# Flask Backend Dependencies for Deployment
+Flask==3.0.0
+flask-cors==4.0.0
+pdfplumber==0.10.3
+pytesseract==0.3.13
+Pillow==10.4.0
+PyMuPDF==1.24.8
+python-docx>=1.0.0
+openai>=1.0.0
