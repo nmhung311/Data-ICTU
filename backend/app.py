@@ -56,9 +56,14 @@ CORS(app)  # Cho phép frontend gọi API
 
 # Thư mục lưu file upload
 # Vercel có read-only filesystem, cần dùng /tmp
-# Detect Vercel CHỈ bằng VERCEL env var (được set trong app.py hoặc api/index.py TRƯỚC khi import)
-# HOẶC kiểm tra /var/task trong __file__ (không dùng getcwd vì có thể đã đổi)
-IS_VERCEL = os.environ.get('VERCEL', '').lower() == '1' or '/var/task' in str(__file__) if '__file__' in globals() else False
+# Detect Vercel: Kiểm tra VERCEL env var TRƯỚC (được set trong app.py/api/index.py)
+# Nếu không có env var, kiểm tra __file__ path
+try:
+    _current_file = __file__
+except NameError:
+    _current_file = ''
+
+IS_VERCEL = os.environ.get('VERCEL', '').lower() == '1' or '/var/task' in str(_current_file)
 
 # Luôn dùng /tmp/uploads trên Vercel NGAY TỪ ĐẦU
 # HOÀN TOÀN KHÔNG TẠO THƯ MỤC KHI IMPORT - chỉ tạo khi upload file
@@ -67,7 +72,7 @@ if IS_VERCEL:
     print(f"🔍 Vercel detected - using /tmp/uploads (will create on first upload)")
 else:
     UPLOAD_FOLDER = 'uploads'
-    # Chỉ tạo thư mục trên local development - TRÁNH tạo nếu không chắc chắn
+    # Chỉ tạo thư mục trên local development - wrap trong try để tránh fail
     try:
         if not os.path.exists(UPLOAD_FOLDER):
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -79,6 +84,7 @@ else:
             print(f"⚠️ Cannot create uploads/, using fallback: {UPLOAD_FOLDER}")
         else:
             print(f"⚠️ Cannot create uploads folder: {e}")
+            # Vẫn set UPLOAD_FOLDER để app không crash, sẽ fail khi upload
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
